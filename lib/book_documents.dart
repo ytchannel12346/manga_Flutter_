@@ -437,14 +437,15 @@ class BookDocuments {
     if (failure != null) Error.throwWithStackTrace(failure, failureStack!);
   }
 
-  /// Existing TXT/EPUB callers keep their original, platform-independent path.
+  /// Existing TXT/EPUB/CBZ callers keep their original, platform-independent path.
   /// MOBI is reconstructed as EPUB and ZIP yields a batch of staged originals.
   Future<List<BookDocumentSelection>> prepareBook(
     BookDocumentSelection book,
   ) async {
     if (book.error != null ||
         book.path == null && book.reference == null ||
-        RegExp(r'\.(txt|epub)$', caseSensitive: false).hasMatch(book.name)) {
+        RegExp(r'\.(txt|epub|cbz)$', caseSensitive: false)
+            .hasMatch(book.name)) {
       return [book];
     }
     try {
@@ -521,9 +522,9 @@ class BookDocuments {
     'path': path,
     'encoding': encoding,
   }))!;
-  Future<Map<String, dynamic>?> connect({required bool create}) => channel
+  Future?> connect({required bool create}) => channel
       .invokeMapMethod<String, dynamic>(create ? 'createSync' : 'openSync');
-  Future<Map<String, dynamic>?> info() =>
+  Future?> info() =>
       channel.invokeMapMethod<String, dynamic>('syncInfo');
   Future<({File before, File output})> read() async {
     final value = await channel.invokeMapMethod<String, dynamic>('readSync');
