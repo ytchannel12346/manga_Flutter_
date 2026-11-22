@@ -17,6 +17,8 @@ import 'book_documents.dart';
 import 'book_sync.dart';
 import 'catalog.dart';
 import 'cloud_sources.dart';
+import 'comic_cbz.dart';
+import 'comic_reader_page.dart';
 import 'dock_layout.dart';
 import 'glass_choices.dart';
 import 'library_state.dart';
@@ -765,7 +767,28 @@ class _LocalLibraryPageState extends State<LocalLibraryPage>
     );
   }
 
-  void _open(Novel book, Object tag) {
+  Future<void> _open(Novel book, Object tag) async {
+    if (widget.books.isComic(book.id)) {
+      final path = widget.books.originalFilePath(book.id);
+      if (path == null) return;
+      try {
+        showNovelFeedback(context, '正在准备漫画页面…');
+        final pages = await ComicCbz.extractPages(path);
+        if (!mounted) return;
+        if (pages.isEmpty) {
+          showNovelFeedback(context, '未找到可阅读的漫画图片');
+          return;
+        }
+        await pushNovelPage<void>(
+          context,
+          ComicReaderPage(title: book.title, pages: pages),
+          reduceMotion: widget.state.reduceMotion,
+        );
+      } catch (e) {
+        if (mounted) showNovelFeedback(context, '打开漫画失败：$e');
+      }
+      return;
+    }
     if (widget.onOpenWithCover case final open?) {
       open(context, book, tag);
     } else {
