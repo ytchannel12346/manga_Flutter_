@@ -6,6 +6,7 @@ import 'app_ui.dart';
 import 'app_interactions.dart';
 import 'catalog.dart';
 import 'cloud_sources.dart';
+import 'comic_reader_page.dart';
 import 'offline_cache.dart' show formatCacheBytes;
 
 typedef ImportCloudBook = Future<Novel> Function(String name, String path);
@@ -522,6 +523,10 @@ class _CloudBookBrowserState extends State<CloudBookBrowser> {
   int _generation = 0, _received = 0;
   int? _total;
   String? _error, _current, _loadedFolder;
+
+  List<CloudBookEntry> get _comicImages =>
+      _entries.where((e) => e.isComicImage).toList();
+
   @override
   void initState() {
     super.initState();
@@ -539,6 +544,24 @@ class _CloudBookBrowserState extends State<CloudBookBrowser> {
     super.dispose();
   }
 
+  Future<void> _openComic({int initialPage = 0}) async {
+    final client = _client;
+    final images = _comicImages;
+    if (client is! WebDavBookClient || images.isEmpty) return;
+    final pages = [
+      for (final e in images)
+        ComicPageSource.network(e.id, headers: client.imageHeaders(e.id)),
+    ];
+    await pushNovelPage<void>(
+      context,
+      ComicReaderPage(
+        title: _folders.last.name,
+        pages: pages,
+        initialPage: initialPage.clamp(0, pages.length - 1),
+      ),
+    );
+  }
+
   Future<void> _load({bool more = false}) async {
     final token = ++_generation;
     setState(() {
@@ -546,10 +569,17 @@ class _CloudBookBrowserState extends State<CloudBookBrowser> {
       _error = null;
     });
     try {
-      final listing = await _client.list(
-        _folders.last.id,
-        page: more ? _next! : 1,
-      );
+      final client = _client;
+      final listing = client is WebDavBookClient
+          ? await client.list(
+              _folders.last.id,
+              page: more ? _next! : 1,
+              includeImages: true,
+            )
+          : await client.list(
+              _folders.last.id,
+              page: more ? _next! : 1,
+            );
       if (!mounted || token != _generation) return;
       setState(() {
         final old = more ? _entries : <CloudBookEntry>[];
@@ -621,8 +651,6 @@ class _CloudBookBrowserState extends State<CloudBookBrowser> {
             entry,
             file,
             onProgress: (received, total) {
-              // Throttle UI updates, not downloads or parsing, to avoid rebuilding
-              // the glass list on every socket chunk.
               if (mounted &&
                   (received - _received >= 128 * 1024 || received == total)) {
                 setState(() {
@@ -772,6 +800,14 @@ class _CloudBookBrowserState extends State<CloudBookBrowser> {
                       ),
                       const SizedBox(height: 12),
                     ],
+                    if (!_importing && _comicImages.isNotEmpty) ...[
+                      GlassPillButton(
+                        icon: CupertinoIcons.book,
+                        label: '以漫画模式阅读（${_comicImages.length} 页）',
+                        onPressed: () => _openComic(),
+                      ),
+                      const SizedBox(height: 12),
+                    ],
                     if (_error != null) ...[
                       AppText(
                         _error!,
@@ -819,6 +855,8 @@ class _CloudBookBrowserState extends State<CloudBookBrowser> {
                           ArchiveIcon(
                             entry.folder
                                 ? CupertinoIcons.folder
+                                : entry.isComicImage
+                                ? CupertinoIcons.photo
                                 : CupertinoIcons.doc_text,
                             size: 24,
                           ),
@@ -829,6 +867,11 @@ class _CloudBookBrowserState extends State<CloudBookBrowser> {
                                   ? null
                                   : () => entry.folder
                                         ? _enter(entry)
+                                        : entry.isComicImage
+                                        ? _openComic(
+                                            initialPage: _comicImages
+                                                .indexOf(entry),
+                                          )
                                         : _import([entry]),
                               child: Padding(
                                 padding: const EdgeInsets.symmetric(
@@ -867,6 +910,11 @@ class _CloudBookBrowserState extends State<CloudBookBrowser> {
                           if (entry.folder)
                             const ArchiveIcon(
                               CupertinoIcons.chevron_forward,
+                              size: 16,
+                            )
+                          else if (entry.isComicImage)
+                            const ArchiveIcon(
+                              CupertinoIcons.eye,
                               size: 16,
                             )
                           else
