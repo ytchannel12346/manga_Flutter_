@@ -127,8 +127,16 @@ ImportedBook parseLocalBook(
       preserveRichText: preserveRichText,
     );
   }
+  if (name.toLowerCase().endsWith('.cbz')) {
+    return _cbz(
+      input.name,
+      id,
+      digest,
+      boundedZip(input.bytes, maxSize: 1024 * 1024 * 1024),
+    );
+  }
   if (!name.toLowerCase().endsWith('.txt')) {
-    throw const FormatException('目前支持 TXT 与 EPUB 格式');
+    throw const FormatException('目前支持 TXT、EPUB 与 CBZ 格式');
   }
   final text = (input.text ?? utf8.decode(input.bytes)).replaceFirst(
     '\uFEFF',
@@ -209,12 +217,80 @@ ImportedBook parseLocalBook(
 
 void _validateInput(String name, int size) {
   if (size <= 0) throw const FormatException('文件为空，请重新下载原书');
-  if (!RegExp(r'\.(txt|epub)$', caseSensitive: false).hasMatch(name)) {
-    throw const FormatException('目前支持 TXT 与 EPUB 格式');
+  if (!RegExp(r'\.(txt|epub|cbz)$', caseSensitive: false).hasMatch(name)) {
+    throw const FormatException('目前支持 TXT、EPUB 与 CBZ 格式');
   }
   if (size > localBookByteLimit(name)) {
     throw FormatException(localBookSizeMessage(name));
   }
+}
+
+int _naturalCompareComic(String a, String b) {
+  final reg = RegExp(r'(\d+|\D+)');
+  final aParts = reg.allMatches(a.toLowerCase()).map((m) => m.group(0)!).toList();
+  final bParts = reg.allMatches(b.toLowerCase()).map((m) => m.group(0)!).toList();
+  final len = aParts.length < bParts.length ? aParts.length : bParts.length;
+  for (var i = 0; i < len; i++) {
+    final aNum = int.tryParse(aParts[i]);
+    final bNum = int.tryParse(bParts[i]);
+    final cmp = (aNum != null && bNum != null)
+        ? aNum.compareTo(bNum)
+        : aParts[i].compareTo(bParts[i]);
+    if (cmp != 0) return cmp;
+  }
+  return aParts.length.compareTo(bParts.length);
+}
+
+ImportedBook _cbz(
+  String name,
+  int id,
+  String digest,
+  Archive archive, {
+  void Function(String name, ArchiveFile file)? saveImage,
+}) {
+  final imageFiles = archive.files.where((f) {
+    if (!f.isFile) return false;
+    if (f.name.startsWith('__MACOSX/') ||
+        f.name.split('/').last.startsWith('._')) {
+      return false;
+    }
+    return supportsComicImage(f.name);
+  }).toList()
+    ..sort((a, b) => _naturalCompareComic(a.name, b.name));
+
+  if (imageFiles.isEmpty) {
+    throw const FormatException('CBZ 压缩包内没有可阅读的漫画图片');
+  }
+
+  final images = <String, Uint8List>{};
+  final first = imageFiles.first;
+  final ext = first.name.split('.').last.toLowerCase();
+  final coverName = 'cover.$ext';
+  if (saveImage != null) {
+    saveImage(coverName, first);
+  } else {
+    images[coverName] = readLocalBookArchiveEntry(first);
+  }
+
+  final title = name
+      .replaceAll('\\', '/')
+      .split('/')
+      .last
+      .replaceFirst(RegExp(r'\.cbz$', caseSensitive: false), '');
+
+  return ImportedBook(
+    _novel(
+      id,
+      title,
+      '本地漫画',
+      [NovelChapter('全 ${imageFiles.length} 页', '', id: 1)],
+      cover: 'wenku-local://$id/$coverName',
+      summary: '本地 CBZ 漫画，共 ${imageFiles.length} 页，可离线阅读。',
+    ),
+    digest,
+    const [''],
+    images,
+  );
 }
 
 Novel _novel(
@@ -1437,6 +1513,7 @@ Future<_ImportedFile> _importOriginal(_ImportJob job) async {
   final suppliedOptions = (job.optionsById[id] ?? job.options).effective;
   final isEpub = job.name.toLowerCase().endsWith('.epub');
   final isText = job.name.toLowerCase().endsWith('.txt');
+  final isCbz = job.name.toLowerCase().endsWith('.cbz');
   final direct = job.linkedOriginal?['direct'] == true;
   if (direct && !job.freshOriginal && job.linkedOriginal!['digest'] != digest) {
     throw const FormatException('原文件已变化，请重新选择原文件');
@@ -1512,6 +1589,20 @@ Future<_ImportedFile> _importOriginal(_ImportJob job) async {
             verifiedImages.add(image.name);
             File('${staging.path}/$name').writeAsBytesSync(bytes);
           }
+        },
+      );
+    } else if (isCbz) {
+      buffer = document?.open();
+      final stream = buffer?.stream ?? InputMemoryStream(job.input!.bytes);
+      final archive = readLocalBookArchive(stream, maxSize: 1024 * 1024 * 1024);
+      parsed = _cbz(
+        job.name,
+        id,
+        digest,
+        archive,
+        saveImage: (name, image) {
+          final bytes = readLocalBookArchiveEntry(image);
+          File('${staging.path}/$name').writeAsBytesSync(bytes);
         },
       );
     } else if (isText &&
@@ -2094,6 +2185,10 @@ class LocalBookStore extends ChangeNotifier
       _series[id]?.volumes.map((v) => importedAt(v.bookId)).fold<int>(0, max) ??
       0;
   bool contains(int id) => book(id) != null;
+  bool isComic(int id) =>
+      (_sources[id]?['name'] as String? ?? '').toLowerCase().endsWith('.cbz');
+  String? originalFilePath(int id) =>
+      _books.containsKey(id) ? '${directory.path}/$id/original' : null;
   List<String> importWarnings(int id) {
     final originals = _series[id]?.volumes.map((v) => v.bookId) ?? [id];
     return {
