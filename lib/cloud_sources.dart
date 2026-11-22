@@ -798,3 +798,38 @@ class QuarkBookClient implements CloudBookClient {
   @override
   void close() => http.close();
 }
+// In CloudBookEntry:
+class CloudBookEntry {
+  const CloudBookEntry({
+    required this.id,
+    required this.name,
+    required this.folder,
+    this.size = 0,
+  });
+  final String id, name;
+  final bool folder;
+  final int size;
+  bool get isBook => !folder && supportsBookImport(name);
+  bool get isComicImage => !folder && supportsComicImage(name); // <-- Add this
+}
+// Inside WebDavBookClient:
+
+/// Expose headers so Image.network can stream directly from WebDAV
+Map<String, String> imageHeaders(String entryId) => _headers(_resource(entryId));
+
+/// Update list() to optionally include comic images
+@override
+Future<CloudBookListing> list(
+  String folder, {
+  int page = 1,
+  bool includeImages = false, // <-- Add optional flag
+}) async {
+  // ... keep existing PROPFIND logic ...
+
+  // Replace: if (entry.folder || entry.isBook) entries.add(entry);
+  if (entry.folder || entry.isBook || (includeImages && entry.isComicImage)) {
+    entries.add(entry);
+  }
+
+  // ... keep existing sort & return ...
+}
